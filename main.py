@@ -8,13 +8,14 @@ import google.generativeai as genai
 
 app = Flask(__name__)
 
-# Lấy Biến môi trường trên Render
+# Lấy Biến môi trường từ Render
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Cấu hình Gemini
-genai.configure(api_key=GEMINI_API_KEY)
+# Cấu hình Gemini API
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 def get_latest_news():
@@ -44,9 +45,13 @@ def job():
         print(f"❌ Lỗi xử lý: {e}")
 
 def run_scheduler():
-    # Gửi tin ngay khi khởi động
+    # Đợi 5 giây để Flask web server khởi động hoàn tất
+    time.sleep(5)
+    
+    # Gửi tin nhắn đầu tiên ngay lập tức
     job()
     
+    # Thiết lập lịch chạy mỗi 4 tiếng
     import schedule
     schedule.every(4).hours.do(job)
     
@@ -59,11 +64,11 @@ def home():
     return "Bot đang hoạt động!"
 
 if __name__ == "__main__":
-    # Chạy vòng lặp tin tức ở luồng ẩn (Background Thread)
+    # Khai báo Thread ẩn để chạy lịch gửi tin tức độc lập với Web Server
     t = threading.Thread(target=run_scheduler)
     t.daemon = True
     t.start()
     
-    # Chạy Web Server ở luồng chính
+    # Chạy Flask Server trên luồng chính
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
