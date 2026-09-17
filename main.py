@@ -1,124 +1,112 @@
 import os
 import time
+import threading
 import requests
 import feedparser
 import schedule
-from crewai import Agent, Task, Crew, Process, LLM
+import google.generativeai as genai
+from flask import Flask
 
-# ==================== 1. THÔNG TIN CẤU HÌNH CỦA BẠN ====================
-import os
-API_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN = "8605115616:AAHleFY6deA8apHaqyXJ_9yDDFdfZSNmjzg"
-TELEGRAM_CHAT_ID = "5637028995"
+# ================= 1. CẤU HÌNH WEB SERVER (CHO RENDER) =================
+app = Flask(__name__)
 
-os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
+@app.route('/')
+def home():
+    return "Bot Telegram đang hoạt động 24/7!"
 
-# Khởi tạo LLM chuẩn hóa cho Key dạng mới
-LLM_MODEL = LLM(
-    model="gemini-3.6-flash",
-    api_key=GEMINI_API_KEY
-)
+def run_flask():
+    port = int(os.getenv("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
-# Danh sách RSS Feed từ các trang báo chính thống
+# Chạy Flask ở luồng riêng để đáp ứng cổng HTTP của Render
+threading.Thread(target=run_flask, daemon=True).start()
+
+# ================= 2. THÔNG TIN CẤU HÌNH API =================
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8605115616:AAHleFY6deA8apHaqyXJ_9yDDfdfZSNmjzg")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "5637028995")
+
+# Khởi tạo Gemini AI
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    print("⚠️ Cảnh báo: Chưa cài đặt GEMINI_API_KEY trong Environment Variables!")
+
+# Danh sách RSS Feed từ các trang báo
 RSS_SOURCES = [
-    "https://vnexpress.net/rss/thoi-su.rss",
-    "https://tuoitre.vn/rss/thoi-su.rss",
-    "https://thanhnien.vn/rss/thoi-su.rss",
-    "https://dantri.com.vn/rss/xahoi.rss"
+    "https://vnexpress.net/rss/tin-moi-nhat.rss",
+    "https://thanhnien.vn/rss/home.rss",
+    "https://tuoitre.vn/rss/tin-moi-nhat.rss"
 ]
 
-# ==================== 2. THU THẬP DỮ LIỆU BÁO CHÍ ====================
-def fetch_all_news():
-    articles = []
-    for url in RSS_SOURCES:
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:4]:
-                articles.append({
-                    "title": entry.title,
-                    "link": entry.link,
-                    "summary": entry.summary if hasattr(entry, 'summary') else ""
-                })
-        except Exception as e:
-            print(f"Lỗi khi cào RSS {url}: {e}")
-    return articles
+# ================= 3. HÀM GỬI TIN NHẮN TELEGRAM =================
+def send_telegram_message(text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("❌ Thiếu TELEGRAM_BOT_TOKEN hoặc TELEGRAM_CHAT_ID!")
+        return
 
-# ==================== 3. KHỞI TẠO CREWAI AGENTS ====================
-editor_agent = Agent(
-    role="Biên tập viên kiểm duyệt",
-    goal="Loại bỏ các bài báo đưa cùng một sự kiện trùng lặp.",
-    backstory="Bạn là biên tập viên giàu kinh nghiệm.",
-    verbose=True,
-    llm=LLM_MODEL
-)
-
-writer_agent = Agent(
-    role="Chuyên viên tóm tắt tin tức",
-    goal="Tóm tắt các tin tức độc nhất thành bản tin sáng cô đọng, giữ lại link gốc.",
-    backstory="Bạn là một biên tập viên điểm tin sáng chuyên nghiệp.",
-    verbose=True,
-    llm=LLM_MODEL
-)
-
-def run_ai_pipeline():
-    print("🚀 Đang cào dữ liệu báo chí mới nhất...")
-    raw_articles = fetch_all_news()
-
-    task_dedup = Task(
-        description=f"""
-        Dưới đây là danh sách các bài báo thô vừa thu thập được:
-        {raw_articles}
-
-        Nhiệm vụ:
-        1. Phân tích tiêu đề và tóm tắt.
-        2. Nếu có 2 hoặc nhiều bài cùng nói về 1 sự kiện, CHỈ GIỮ LẠI 1 bài viết đầy đủ nhất.
-        3. Trả về danh sách bài báo không trùng lặp (giữ nguyên title, link, summary).
-        """,
-        expected_output="Danh sách các bài báo đã lọc sạch trùng lặp.",
-        agent=editor_agent
-    )
-
-    task_summarize = Task(
-        description="""
-        Từ danh sách bài báo đã lọc, hãy tạo thành 1 Bản Tin Sáng theo đúng định dạng Markdown sau:
-
-        📰 **BẢN TIN SÁNG NÓNG HỔI**
-
-        1. **[Tiêu đề bài viết]**
-        - **Tóm tắt:** [Tóm tắt 2-3 câu ngắn gọn về sự kiện]
-        - **Nguồn:** [Đường link gốc]
-
-        (Lặp lại cho các bài tin tiếp theo)
-        """,
-        expected_output="Bản tin hoàn chỉnh bằng Markdown sẵn sàng gửi đi.",
-        agent=writer_agent
-    )
-
-    news_crew = Crew(
-        agents=[editor_agent, writer_agent],
-        tasks=[task_dedup, task_summarize],
-        process=Process.sequential
-    )
-
-    print("🤖 AI Agent đang tiến hành lọc tin trùng và tóm tắt...")
-    result = news_crew.kickoff()
-    send_telegram(str(result))
-
-def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    max_length = 3500
     
-    # Chia nhỏ tin nhắn nếu vượt quá 3500 ký tự
+    # Chia nhỏ tin nhắn nếu dài hơn 4000 ký tự (giới hạn Telegram)
+    max_length = 4000
     for i in range(0, len(text), max_length):
         chunk = text[i:i + max_length]
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": chunk
+            "text": chunk,
+            "parse_mode": "Markdown"
         }
-        res = requests.post(url, json=payload)
-        print(f"Phản hồi Telegram (Phần {i//max_length + 1}):", res.json())
-        time.sleep(1)
-# ==================== 4. THỰC THI CHƯƠNG TRÌNH ====================
+        try:
+            res = requests.post(url, json=payload)
+            if res.status_code != 200:
+                # Nếu gửi Markdown lỗi thì gửi lại dạng thường
+                payload.pop("parse_mode", None)
+                requests.post(url, json=payload)
+        except Exception as e:
+            print(f"Lỗi gửi Telegram: {e}")
+
+# ================= 4. LUỒNG XỬ LÝ LẤY TIN & TÓM TẮT =================
+def job():
+    print("🤖 Đang thu thập tin tức...")
+    articles = []
+    
+    for rss_url in RSS_SOURCES:
+        try:
+            feed = feedparser.parse(rss_url)
+            for entry in feed.entries[:3]:  # Lấy 3 tin mới nhất từ mỗi trang
+                articles.append(f"- Tiêu đề: {entry.title}\n  Liên kết: {entry.link}")
+        except Exception as e:
+            print(f"Lỗi đọc RSS {rss_url}: {e}")
+
+    if not articles:
+        print("Không tìm thấy tin tức mới.")
+        return
+
+    news_text = "\n".join(articles)
+    prompt = (
+        "Bạn là một biên tập viên tin tức chuyên nghiệp. Hãy tóm tắt các tin tức dưới đây "
+        "thành một bản tin ngắn gọn, súc tích, trình bày đẹp mắt bằng điểm tin (bullet points) "
+        "và thêm biểu tượng cảm xúc (emoji) phù hợp để gửi qua Telegram:\n\n"
+        f"{news_text}"
+    )
+
+    try:
+        response = model.generate_content(prompt)
+        summary = response.text
+        send_telegram_message(f"📰 **BẢN TIN TỔNG HỢP MỚI NHẤT** 📰\n\n{summary}")
+        print("✅ Đã gửi bản tin thành công về Telegram!")
+    except Exception as e:
+        print(f"Lỗi khi gọi Gemini AI: {e}")
+
+# ================= 5. LẬP LỊCH CHẠY TỰ ĐỘNG =================
+# Chạy thử 1 lần ngay khi khởi động
+job()
+
+# Lập lịch chạy định kỳ mỗi 4 tiếng
+schedule.every(4).hours.do(job)
+
 if __name__ == "__main__":
-    print("🤖 Khởi động hệ thống AI Agent...")
-    run_ai_pipeline()
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
