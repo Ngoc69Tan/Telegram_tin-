@@ -13,7 +13,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Cấu hình Gemini API
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -38,20 +37,18 @@ def job():
         prompt = f"Hãy tóm tắt ngắn gọn các tin tức sau đây theo dạng danh sách dễ đọc bằng tiếng Việt:\n\n{raw_news}"
         
         response = model.generate_content(prompt)
-        
         send_telegram(response.text)
         print("✅ Đã gửi tin nhắn Telegram thành công!")
+        return True, "Thành công"
     except Exception as e:
         print(f"❌ Lỗi xử lý: {e}")
+        return False, str(e)
 
 def run_scheduler():
-    # Đợi 5 giây để Flask web server khởi động hoàn tất
+    # Tự động gửi 1 lần sau khi khởi động 5 giây
     time.sleep(5)
-    
-    # Gửi tin nhắn đầu tiên ngay lập tức
     job()
     
-    # Thiết lập lịch chạy mỗi 4 tiếng
     import schedule
     schedule.every(4).hours.do(job)
     
@@ -61,14 +58,21 @@ def run_scheduler():
 
 @app.route('/')
 def home():
-    return "Bot đang hoạt động!"
+    return "Bot đang hoạt động! Muốn test gửi tin ngay hãy vào đường dẫn /test"
+
+# Tạo đường dẫn /test để bạn tự kích hoạt gửi tin bằng trình duyệt
+@app.route('/test')
+def test_send():
+    success, msg = job()
+    if success:
+        return "✅ Đã kích hoạt gửi tin nhắn Telegram thành công!"
+    else:
+        return f"❌ Lỗi khi gửi tin: {msg}"
 
 if __name__ == "__main__":
-    # Khai báo Thread ẩn để chạy lịch gửi tin tức độc lập với Web Server
     t = threading.Thread(target=run_scheduler)
     t.daemon = True
     t.start()
     
-    # Chạy Flask Server trên luồng chính
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
