@@ -104,7 +104,7 @@ def job():
 job()
 
 # Lập lịch chạy định kỳ mỗi 4 tiếng
-schedule.every(4).hours.do(job)
+schedule.every(2).minutes.do(job)
 
 if __name__ == "__main__":
     while True:
